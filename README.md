@@ -42,6 +42,7 @@ src/answer/
   answer.ts             refusal threshold + citation prompt
 
 docs/DECISIONS.md       why it's written this way: eight bugs and decisions
+docs/EVALUATION.md      how the system it came from was measured in production
 ```
 
 ---
@@ -139,9 +140,14 @@ authentication, document management, the interface — isn't here, and neither i
 the corpus, which was copyrighted material.
 
 What is here is the transferable part: the schema, the hybrid search and the
-decisions behind them. [`docs/DECISIONS.md`](docs/DECISIONS.md) is probably the
-most useful piece — eight bugs and decisions that only surface once a system has
-been running on real data for a while.
+decisions behind them. Two documents carry most of the value:
+
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — eight bugs and decisions that only
+  surface once a system has been running on real data for a while.
+- [`docs/EVALUATION.md`](docs/EVALUATION.md) — how a RAG system already serving
+  ~16,000 queries a week was measured: capturing production traffic as the eval
+  set, classifying each replay into a reviewable diff, and why a single quality
+  score is the wrong output.
 
 ## License
 
