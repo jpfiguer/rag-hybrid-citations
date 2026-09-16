@@ -8,8 +8,8 @@ Every deploy is a shot in the dark until you can answer one question in seconds:
 Without that signal, each reactive fix can silently break something else, and
 you find out when the client tells you.
 
-This document describes the harness built to answer it, for a RAG system serving
-around 16,000 queries a week. It is method, not code — the implementation lives
+This document describes the harness built to answer it, for a RAG system whose
+traffic grew from ~3,000 to ~16,000 queries per weekly window over five months. It is method, not code — the implementation lives
 in the private system this repository was extracted from. The parts worth
 copying are the decisions.
 
@@ -30,12 +30,19 @@ Monday PM   replay against production after the week's deploys
             review anything marked REGRESSED with a domain expert
 ```
 
-A capture from a single week of that system held ~16,000 queries collapsing into
-78 distinct questions. That ratio is the point: **real traffic is far more
-repetitive than a hand-written suite**, so a small captured set covers most of
-what actually happens, and it updates itself every week for free.
+The capture is a sample, not a census: it pulls the first N entries from the
+query log for the window — 100 by default — and dedupes them to one sample per
+distinct question. A typical run yielded 78 distinct questions out of those 100
+log entries. One run hit exactly 100, which is the cap telling you it bound: that
+week had more distinct questions than the sample could hold.
 
-It also captures the questions you would never have thought to write — the vague
+Stating the sampling explicitly matters, because the number invites a conclusion
+it doesn't support. 78 distinct questions is **not** evidence that a week's
+traffic reduces to 78 things people ask. It is 78 out of a 100-entry sample. What
+the baseline gives you is questions that are *real*, refreshed weekly at no
+authoring cost — not a claim about how repetitive your traffic is.
+
+It also captures the questions you would never have thought to write: the vague
 ones, the half-typed ones, the ones that mix two topics.
 
 ---
@@ -140,8 +147,8 @@ with a 0.86 mean means most answers are near-perfectly grounded and a small tail
 is not — which is a completely different engineering problem from "the system is
 uniformly mediocre", and a single mean would have hidden it.
 
-**Response relevancy at 0.50 looks bad and mostly isn't.** A third of the sample
-were turns where the system asked for clarification instead of answering.
+**Response relevancy at 0.50 looks bad and mostly isn't.** Of 30 judged turns, 9
+were cases where the system asked for a clarification instead of answering.
 Judged as answers, they score near zero. Excluding them, relevancy is 0.64. The
 metric was measuring a behaviour that was working as designed — which is a
 reminder that a metric you haven't segmented is a metric you don't understand
