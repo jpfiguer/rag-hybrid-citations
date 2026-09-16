@@ -2,19 +2,23 @@ import { formatPageRef } from "../retrieval/search";
 import type { RetrievedChunk } from "../types";
 
 /**
- * Arma el bloque CORPUS que se le entrega al modelo.
+ * Builds the CORPUS block handed to the model.
  *
- * El detalle que importa: cada fragmento declara EXPLÍCITAMENTE qué metadata
- * falta, en vez de omitir el campo.
+ * The detail that matters: every fragment EXPLICITLY declares which metadata is
+ * missing, instead of omitting the field.
  *
- * Cuando un campo simplemente no aparece, el modelo lo rellena. Pedirle una
- * cita en APA sobre un corpus sin año de publicación produce años inventados
- * con total aplomo —"(2019)"— porque el formato APA los espera y nada en el
- * prompt dice que ese dato no existe. Decir "AÑO=(no registrado — usá «s.f.»)"
- * cuesta doce palabras y elimina la categoría entera de alucinación.
+ * When a field simply isn't there, the model fills it in. Asking for an APA
+ * citation over a corpus with no publication year produces invented years,
+ * stated with complete confidence — "(2019)" — because the APA format expects
+ * one and nothing in the prompt says that value doesn't exist. Saying
+ * "YEAR=(not recorded — use 'n.d.')" costs twelve words and eliminates the
+ * entire class of hallucination.
  *
- * Es el mismo principio que un fallo ruidoso: la ausencia de un dato tiene que
- * ser visible, no silenciosa.
+ * Same principle as failing loudly: the absence of a value has to be visible,
+ * not silent.
+ *
+ * The labels stay in the corpus language (Spanish here) because they share the
+ * prompt with it — see the note in answer.ts.
  */
 export function buildCorpusBlock(chunks: RetrievedChunk[]): string {
   return chunks
@@ -36,8 +40,8 @@ export function buildCorpusBlock(chunks: RetrievedChunk[]): string {
         .filter(Boolean)
         .join(" · ");
 
-      // Las comillas angulares delimitan el texto citable. Sin un delimitador
-      // claro, el modelo mezcla el contenido del fragmento con su metadata.
+      // The angle quotes delimit the citable text. Without a clear delimiter the
+      // model blends the fragment's content with its metadata.
       return `${meta}\n«${c.content}»`;
     })
     .join("\n\n");

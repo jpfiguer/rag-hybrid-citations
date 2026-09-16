@@ -7,11 +7,11 @@ function getClient() {
 }
 
 const MODEL = "text-embedding-3-large";
-const DIMENSIONS = 1536; // Matryoshka — compatibilidad con HNSW de pgvector
-const BATCH_SIZE = 96;   // por debajo del límite de tokens/request
+const DIMENSIONS = 1536; // Matryoshka — keeps the pgvector HNSW index within page-size limits
+const BATCH_SIZE = 96;   // below the per-request token limit
 
 /**
- * Embebe N textos en lotes y devuelve vectores en el mismo orden.
+ * Embeds N texts in batches and returns the vectors in the same order.
  */
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   const openai = getClient();

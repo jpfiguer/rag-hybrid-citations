@@ -3,89 +3,88 @@
 > Hybrid RAG retrieval on Postgres + pgvector, with verifiable citations and an
 > explicit refusal path. Extracted from a production system.
 
-Pipeline de RAG con dos propiedades que no suelen venir juntas: **búsqueda
-híbrida** (densa + BM25, fusionadas con Reciprocal Rank Fusion en Postgres) y
-**citas comprobables** — cada afirmación lleva `[N]` y cada `[N]` apunta a un
-documento, una página y una sección concretas, para que quien lee pueda ir a
-verificar.
+A RAG pipeline with two properties that rarely come together: **hybrid search**
+(dense + BM25, fused with Reciprocal Rank Fusion inside Postgres) and
+**verifiable citations** — every claim carries a `[N]`, and every `[N]` points at
+a specific document, page and section, so the reader can go check.
 
-Cuando el corpus no contiene la respuesta, el sistema lo dice en vez de
-improvisar. Esa es la parte difícil, y tiene su propia sección abajo.
+When the corpus doesn't hold the answer, the system says so instead of
+improvising. That's the hard part, and it has its own section below.
 
-Es **código de referencia**, no una librería instalable ni una app. Está
-extraído de un sistema en producción y publicado para que se pueda leer y
-adaptar: no hay `npm install rag-hybrid-citations`.
+This is **reference code**, not an installable library and not an app. It was
+extracted from a production system and published to be read and adapted: there
+is no `npm install rag-hybrid-citations`.
 
 ---
 
-## Lo que hay acá
+## What's here
 
 ```
 sql/
-  001_schema.sql        documents + chunks, pgvector, tsvector generada,
-                        índices HNSW y GIN
-  002_hybrid_search.sql la función de búsqueda: denso + BM25 fusionados
-                        con RRF, con los tres fixes que costaron sangre
+  001_schema.sql        documents + chunks, pgvector, generated tsvector,
+                        HNSW and GIN indexes
+  002_hybrid_search.sql the search function: dense + BM25 fused with RRF,
+                        including the three fixes that cost blood
 
 src/ingest/
-  ocr.ts                Mistral OCR: markdown por página, escaneos incluidos
-  chunker.ts            chunking estructural con mapa offset→página y
-                        sectionPath ("Parte II > Capítulo 3")
-  embedder.ts           embeddings por lotes, 1536d vía Matryoshka
+  ocr.ts                Mistral OCR: markdown per page, scans included
+  chunker.ts            structural chunking with an offset→page map and a
+                        sectionPath ("Part II > Chapter 3")
+  embedder.ts           batched embeddings, 1536d via Matryoshka
 
 src/retrieval/
-  plan.ts               planificador: 1..N consultas desde la conversación
-  search.ts             ejecuta la búsqueda híbrida
-  merge.ts              fusiona N resultados; límites adaptativos
+  plan.ts               query planner: 1..N queries from the conversation
+  search.ts             runs the hybrid search
+  merge.ts              merges N result sets; adaptive limits
 
 src/answer/
-  corpus-block.ts       arma el bloque CORPUS declarando la metadata ausente
-  answer.ts             umbral de rechazo + prompt de citas
+  corpus-block.ts       builds the CORPUS block, declaring absent metadata
+  answer.ts             refusal threshold + citation prompt
 
-docs/DECISIONS.md       por qué está escrito así: ocho bugs y decisiones
+docs/DECISIONS.md       why it's written this way: eight bugs and decisions
 ```
 
 ---
 
-## Las tres ideas
+## The three ideas
 
-### 1. La fusión ocurre en SQL
+### 1. Fusion happens in SQL
 
-`hybrid_search` corre los dos rankings —distancia coseno sobre HNSW y
-`ts_rank_cd` sobre un índice GIN— y los fusiona con RRF dentro de Postgres.
+`hybrid_search` runs both rankings — cosine distance over HNSW and `ts_rank_cd`
+over a GIN index — and fuses them with RRF inside Postgres.
 
-RRF fusiona por **posición**, no por puntaje. Eso evita tener que normalizar la
-distancia coseno contra `ts_rank_cd`, que son dos escalas sin relación, y evita
-elegir un peso arbitrario entre ambas. El `k = 60` viene del paper original.
+RRF fuses by **rank**, not by score. That avoids having to normalize cosine
+distance against `ts_rank_cd` — two scales with no relationship — and avoids
+picking an arbitrary weight between them. The `k = 60` comes from the original
+paper.
 
-Traer los dos rankings a Node para mezclarlos ahí significaría mover cientos de
-filas por consulta para descartar casi todas.
+Pulling both rankings into Node to mix them there would mean moving hundreds of
+rows per query only to discard almost all of them.
 
-### 2. La consulta del usuario no es la consulta de búsqueda
+### 2. The user's message is not the search query
 
-`plan.ts` traduce la conversación a 1..N consultas autocontenidas:
+`plan.ts` translates the conversation into 1..N self-contained queries:
 
-- Un follow-up corto ("dame ejemplos") se resuelve con el referente del turno
-  anterior, para que la consulta se entienda sola.
-- Un mensaje con cinco sub-preguntas produce cinco búsquedas en paralelo, no
-  una que las promedie.
-- El relleno conversacional se elimina; los nombres propios se preservan.
+- A short follow-up ("give me examples") is resolved against the previous turn's
+  referent, so the query stands on its own.
+- A message with five sub-questions produces five parallel searches, not one
+  that averages them.
+- Conversational filler is stripped; proper nouns are preserved.
 
-Y una regla que parece menor y no lo es: **prohibido agregar palabras genéricas**
-("ideas principales", "resumen", "conceptos"). El lado sparse es BM25 y trata
-los términos como AND, así que cada palabra de más es un requisito de más. La
-intuición de "más contexto es mejor", cierta para el lado denso, es falsa para
-el sparse.
+And one rule that looks minor and isn't: **no generic scaffolding words**
+("main ideas", "summary", "concepts"). The sparse side is BM25 and treats terms
+as AND, so every extra word is one more requirement. The intuition that "more
+context is better" — true for the dense side — is false for the sparse one.
 
-### 3. Rechazar es un resultado, no un error
+### 3. Refusing is a result, not an error
 
-La búsqueda híbrida siempre devuelve algo. Sin un piso de puntaje, una pregunta
-sobre un tema ausente recupera los fragmentos menos malos y el modelo arma una
-respuesta citándolos — con citas **reales** a pasajes que no vienen al caso.
-Eso es peor que un "no sé".
+Hybrid search always returns something. Without a score floor, a question about
+an absent topic retrieves the least-bad fragments and the model assembles an
+answer citing them — with **real** citations to passages that don't apply. That
+is worse than "I don't know".
 
-`MIN_RRF_SCORE` corta ahí, y `answer()` devuelve el rechazo como un caso normal
-del tipo de retorno:
+`MIN_RRF_SCORE` cuts there, and `answer()` returns the refusal as a normal case
+of the return type:
 
 ```ts
 const result = await answer(messages, chunks);
@@ -93,16 +92,16 @@ if (result.kind === "refusal") return result.text;
 for await (const delta of result.stream) { /* … */ }
 ```
 
-El prompt, además, separa lo que el modelo **afirma sobre las fuentes** —cita
-obligatoria— de lo que **aporta de su lado** —marca obligatoria: "un ejemplo
-sería…"—. Sin esa distinción hay que elegir entre un asistente inservible, que
-no puede dar un ejemplo, y uno que le atribuye al autor ejemplos que el autor
-nunca dio. La segunda alucinación es peor: suena razonable y la cita que la
-acompaña es auténtica.
+The prompt also separates what the model **asserts about the sources** —
+citation required — from what it **contributes itself** — marking required: "an
+example would be…". Without that distinction you have to choose between a
+useless assistant that can't give an example, and one that attributes to the
+author examples the author never gave. The second hallucination is worse: it
+sounds reasonable and the citation attached to it is genuine.
 
 ---
 
-## Uso
+## Usage
 
 ```ts
 import { planQueries, wantsBroadCoverage } from "./src/retrieval/plan";
@@ -123,27 +122,27 @@ const results = await Promise.all(
 const result = await answer(messages, mergeResults(results, final));
 ```
 
-`db` es cualquier cosa que sepa llamar a una función de Postgres — el tipo
-`RpcClient` de `src/types.ts` tiene un solo método. `@supabase/supabase-js` lo
-cumple; el paquete no se casa con ningún SDK.
+`db` is anything that can call a Postgres function — the `RpcClient` type in
+`src/types.ts` has a single method. `@supabase/supabase-js` satisfies it; the
+package is not married to any SDK.
 
-Requiere Postgres 15+ con **pgvector >= 0.8** (el fix de `iterative_scan` no
-existe antes) y las variables de `.env.example`.
+Requires Postgres 15+ with **pgvector >= 0.8** (the `iterative_scan` fix doesn't
+exist before that) and the variables in `.env.example`.
 
 ---
 
-## Por qué existe este repositorio
+## Why this repository exists
 
-Extraído de un sistema de RAG académico en producción: estudiantes consultan el
-material de su curso y cada respuesta cita el pasaje textual. El código de
-producto —autenticación, gestión de documentos, interfaz— no está acá, ni el
-corpus, que era material con derechos de autor.
+Extracted from an academic RAG system in production: students query their course
+material and every answer cites the source passage. The product code —
+authentication, document management, the interface — isn't here, and neither is
+the corpus, which was copyrighted material.
 
-Lo que sí está es la parte transferible: el esquema, la búsqueda híbrida y las
-decisiones que la sostienen. [`docs/DECISIONS.md`](docs/DECISIONS.md) es
-probablemente la parte más útil — son ocho bugs y decisiones que solo aparecen
-cuando el sistema lleva tiempo corriendo con datos reales.
+What is here is the transferable part: the schema, the hybrid search and the
+decisions behind them. [`docs/DECISIONS.md`](docs/DECISIONS.md) is probably the
+most useful piece — eight bugs and decisions that only surface once a system has
+been running on real data for a while.
 
-## Licencia
+## License
 
-MIT — ver [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

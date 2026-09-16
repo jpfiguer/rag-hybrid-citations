@@ -15,20 +15,23 @@ type ChunkOpts = {
 };
 
 const DEFAULT_OPTS: ChunkOpts = {
-  targetChars: 2000,  // ≈ 500 tokens en ES
+  targetChars: 2000,  // ≈ 500 tokens in Spanish
   overlapChars: 300,  // ≈ 75 tokens
   minChars: 200,
 };
 
 /**
- * Concatena las páginas en un string único manteniendo un mapa offset→página,
- * luego parte en chunks respetando límites de párrafo cuando es posible.
- * Detecta headers markdown para construir un sectionPath ("Libro I > Cap. 3").
+ * Concatenates the pages into a single string while keeping an offset→page map,
+ * then splits into chunks respecting paragraph boundaries where possible.
+ * Detects markdown headers to build a sectionPath ("Book I > Ch. 3").
+ *
+ * The page map is what makes citations verifiable downstream: a chunk that can't
+ * say which page it came from produces a citation nobody can check.
  */
 export function chunkPages(pages: OcrPage[], opts: Partial<ChunkOpts> = {}): Chunk[] {
   const o = { ...DEFAULT_OPTS, ...opts };
 
-  // 1) Construir texto combinado + mapa de página
+  // 1) Build the combined text + page map
   const pageStarts: { offset: number; page: number }[] = [];
   let text = "";
   for (const p of pages) {
@@ -37,7 +40,7 @@ export function chunkPages(pages: OcrPage[], opts: Partial<ChunkOpts> = {}): Chu
   }
   if (text.length === 0) return [];
 
-  // Binary search: qué página contiene un offset dado
+  // Binary search: which page contains a given offset
   const pageAt = (offset: number): number => {
     let lo = 0;
     let hi = pageStarts.length - 1;
@@ -49,7 +52,7 @@ export function chunkPages(pages: OcrPage[], opts: Partial<ChunkOpts> = {}): Chu
     return pageStarts[lo].page;
   };
 
-  // 2) Precomputar posiciones de headers markdown
+  // 2) Precompute markdown header positions
   const headerRegex = /^(#{1,6})\s+(.+)$/gm;
   const headers: { offset: number; level: number; title: string }[] = [];
   let m: RegExpExecArray | null;
@@ -60,14 +63,14 @@ export function chunkPages(pages: OcrPage[], opts: Partial<ChunkOpts> = {}): Chu
     const stack: string[] = [];
     for (const h of headers) {
       if (h.offset > offset) break;
-      // Recortar stack al nivel del header actual
+      // Trim the stack to the current header's level
       while (stack.length >= h.level) stack.pop();
       stack.push(h.title);
     }
     return stack.length > 0 ? stack.join(" > ") : null;
   };
 
-  // 3) Chunking con break-points preferidos
+  // 3) Chunking with preferred break points
   const chunks: Chunk[] = [];
   let cursor = 0;
   while (cursor < text.length) {
@@ -75,17 +78,17 @@ export function chunkPages(pages: OcrPage[], opts: Partial<ChunkOpts> = {}): Chu
     let actualEnd = windowEnd;
 
     if (windowEnd < text.length) {
-      // Preferir doble salto (párrafo)
+      // Prefer a blank line (paragraph break)
       const paraIdx = text.lastIndexOf("\n\n", windowEnd);
       if (paraIdx > cursor + o.targetChars * 0.5) {
         actualEnd = paraIdx;
       } else {
-        // Salto simple
+        // Single line break
         const lineIdx = text.lastIndexOf("\n", windowEnd);
         if (lineIdx > cursor + o.targetChars * 0.6) {
           actualEnd = lineIdx;
         } else {
-          // Final de oración
+          // Sentence end
           const dotIdx = text.lastIndexOf(". ", windowEnd);
           if (dotIdx > cursor + o.targetChars * 0.7) actualEnd = dotIdx + 1;
         }

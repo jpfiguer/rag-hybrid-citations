@@ -4,13 +4,16 @@ const MODEL = "gpt-4o-mini";
 const MAX_QUERIES = 10;
 
 /**
- * El planificador de consultas.
+ * The query planner.
  *
- * El mensaje del usuario y una buena consulta de búsqueda casi nunca son lo
- * mismo. "Explícame a detalle el texto de Ostrom sobre gobernanza de recursos
- * comunes" es una pregunta legítima y una consulta pésima: la mitad son
- * palabras de relleno que ensucian el matching. Y un mensaje con cinco
- * sub-preguntas necesita cinco búsquedas, no una que promedie las cinco.
+ * The user's message and a good search query are almost never the same thing.
+ * "Explain to me in detail Ostrom's text on governing common resources" is a
+ * legitimate question and a terrible query: half of it is filler that pollutes
+ * the matching. And a message with five sub-questions needs five searches, not
+ * one that averages them.
+ *
+ * NOTE ON LANGUAGE: the prompt below is in Spanish because the corpus is. See
+ * the note in answer.ts — prompt language follows corpus language.
  */
 const SYSTEM = `Eres un planificador de consultas para un motor de búsqueda RAG.
 
@@ -57,24 +60,24 @@ export type CorpusDoc = { title: string; author: string | null };
 function cleanQuery(q: unknown): string | null {
   if (typeof q !== "string") return null;
   const trimmed = q.trim().replace(/^["'«»\s]+|["'«»\s]+$/g, "");
-  // Menos de 3 caracteres útiles no es una consulta, es ruido de parseo.
+  // Fewer than 3 useful characters isn't a query, it's parsing noise.
   if (trimmed.replace(/[\s.,;:!¡¿?"'()\-]+/g, "").length < 3) return null;
   return trimmed.slice(0, 400);
 }
 
 /**
- * Planifica 1..N consultas a partir de los últimos turnos.
+ * Plans 1..N queries from the most recent turns.
  *
- * `corpusDocs` es la lista de documentos realmente disponibles. Sin ese ancla
- * el planificador alucina fuentes plausibles para el dominio —autores que
- * "deberían" estar— y luego el motor busca material que nunca se cargó. Es un
- * caso de alucinación que no ocurre en el modelo que responde sino en el que
- * planifica, y por eso se escapa de las evaluaciones que solo miran la
- * respuesta final.
+ * `corpusDocs` is the list of documents actually available. Without that anchor
+ * the planner hallucinates sources that are plausible for the domain — authors
+ * that "ought to" be there — and the engine then searches for material that was
+ * never loaded. It's a hallucination that happens in the planning model rather
+ * than the answering one, which is why it escapes evaluations that only look at
+ * the final answer.
  *
- * Nunca lanza: ante cualquier fallo devuelve el mensaje del usuario como única
- * consulta. Un planificador caído degrada la calidad de la búsqueda; no debe
- * tumbar la respuesta.
+ * Never throws: on any failure it returns the user's message as the single
+ * query. A broken planner should degrade search quality, not take the answer
+ * down with it.
  */
 export async function planQueries(
   messages: Msg[],
@@ -86,8 +89,8 @@ export async function planQueries(
   const trimmed = lastUser.content.trim();
   const priorTurns = messages.filter((m) => m.role !== "system");
 
-  // Atajo: un término suelto en el primer turno ya es la consulta. Pedirle al
-  // modelo que "planifique" sobre una sola palabra agrega latencia y riesgo.
+  // Shortcut: a bare term on the first turn is already the query. Asking the
+  // model to "plan" over a single word adds latency and risk for nothing.
   const looksLikeBareTerm = trimmed.split(/\s+/).length <= 3 && !trimmed.includes("?");
   if (priorTurns.length <= 1 && looksLikeBareTerm) return [trimmed];
 
@@ -134,10 +137,9 @@ export async function planQueries(
 }
 
 /**
- * Detecta pedidos de cobertura amplia, que necesitan más material recuperado
- * para no omitir fuentes. Es una heurística barata a propósito: gastar una
- * llamada al modelo para decidir cuánto recuperar antes de recuperar duplica
- * la latencia del turno.
+ * Detects broad-coverage requests, which need more retrieved material so that no
+ * source gets omitted. Deliberately a cheap heuristic: spending a model call to
+ * decide how much to retrieve, before retrieving, doubles the turn's latency.
  */
 export function wantsBroadCoverage(message: string): boolean {
   return /\b(resumen|res[uú]men|resume).{0,40}(cada|todos|todas|completo|completa|exhaustivo|extenso|de todo)\b|\bde cada (autor|fuente|texto|documento)\b|\btodo el material\b/i.test(

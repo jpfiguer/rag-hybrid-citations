@@ -18,9 +18,10 @@ function getClient() {
 }
 
 /**
- * Mistral OCR procesa tanto PDFs digitales como escaneos y devuelve markdown
- * por página. Para corpus académico es preferible a mezclar pdfjs + OCR porque
- * el output es uniforme (misma estructura, mismo tratamiento de headers).
+ * Mistral OCR handles both digital PDFs and scans, returning markdown per page.
+ * For an academic corpus it beats mixing pdfjs + a separate OCR pass because the
+ * output is uniform — same structure, same header treatment — which is what the
+ * chunker's sectionPath detection depends on.
  */
 export async function runOcr(documentUrl: string): Promise<OcrResult> {
   const mistral = getClient();

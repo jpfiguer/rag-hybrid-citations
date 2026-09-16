@@ -1,30 +1,29 @@
-# Decisiones y bugs pagados
+# Decisions and bugs paid for
 
-Lo que sigue no salió del diseño inicial. Salió de que el sistema fallara en
-producción de formas que no se parecían a su causa. Están acá porque el valor
-de este repositorio no es el código —son doscientas líneas— sino saber por qué
-está escrito así.
+None of what follows came from the initial design. It came from the system
+failing in production in ways that didn't look like their cause. It's here
+because the value of this repository isn't the code — that's two hundred lines —
+but knowing why it's written this way.
 
 ---
 
-## 1. HNSW devuelve cero resultados cuando el filtro es post-hoc
+## 1. HNSW returns zero results when the filter is post-hoc
 
-**Síntoma.** La búsqueda funcionaba con una colección cargada. Al agregar una
-segunda, más grande, las consultas contra la primera empezaron a devolver cero
-chunks. Sin error, sin timeout: cero filas, como si la colección estuviera
-vacía.
+**Symptom.** Search worked with one collection loaded. Adding a second, larger
+one made queries against the first start returning zero chunks. No error, no
+timeout: zero rows, as if the collection were empty.
 
-**Causa.** El índice HNSW recorre el grafo de vecinos más cercanos y
-**después** se aplica `where collection_id = X`. Si los vecinos más cercanos
-del vector de consulta pertenecen a la otra colección, el filtro los descarta
-todos y no queda nada. Cuanto más desbalanceadas las colecciones, más probable.
+**Cause.** The HNSW index walks the nearest-neighbour graph and **then** applies
+`where collection_id = X`. If the query vector's nearest neighbours belong to
+the other collection, the filter discards all of them and nothing is left. The
+more unbalanced the collections, the more likely it gets.
 
-Es contraintuitivo porque la lógica de la consulta parece decir "busca dentro
-de esta colección", cuando en realidad dice "busca en todo y quédate con lo de
-esta colección".
+It's counterintuitive because the query appears to say "search within this
+collection", when it actually says "search everything and keep what belongs to
+this collection".
 
-**Fix.** `iterative_scan = strict_order`, de pgvector 0.8: HNSW sigue buscando
-más allá de `ef_search` cuando el filtro descarta candidatos.
+**Fix.** `iterative_scan = strict_order`, from pgvector 0.8: HNSW keeps
+searching beyond `ef_search` when the filter discards candidates.
 
 ```sql
 set local hnsw.iterative_scan = 'strict_order';
@@ -33,123 +32,121 @@ set local hnsw.max_scan_tuples = 20000;
 
 Ref: [pgvector — iterative index scans](https://github.com/pgvector/pgvector#iterative-index-scans)
 
-**La lección.** Un índice vectorial con filtro de tenant no es lo mismo que un
-índice por tenant. Si el sistema es multi-colección, hay que probarlo con
-colecciones de tamaños muy distintos, porque con datos parejos el bug no
-aparece.
+**The lesson.** A vector index with a tenant filter is not the same as an index
+per tenant. If the system is multi-collection, test it with collections of very
+different sizes — with evenly sized data the bug never shows up.
 
 ---
 
-## 2. `SET LOCAL` no se permite en funciones `STABLE`
+## 2. `SET LOCAL` isn't allowed in `STABLE` functions
 
-**Síntoma.** Al aplicar el fix anterior, la función dejó de crearse.
+**Symptom.** Applying the fix above, the function stopped being creatable.
 
-**Causa.** La función solo lee, así que estaba marcada `STABLE` —lo correcto
-según la intuición—. Pero Postgres prohíbe `SET LOCAL` dentro de funciones
-`STABLE` o `IMMUTABLE`, y el fix de HNSW necesita exactamente eso.
+**Cause.** The function only reads, so it was marked `STABLE` — the intuitively
+correct choice. But Postgres forbids `SET LOCAL` inside `STABLE` or `IMMUTABLE`
+functions, and the HNSW fix needs exactly that.
 
-**Fix.** `volatile`. Cuesta algo de capacidad de optimización del planner y no
-hay alternativa.
+**Fix.** `volatile`. It costs some planner optimization and there's no
+alternative.
 
 ---
 
-## 3. `sum(numeric)` contra un retorno `float`
+## 3. `sum(numeric)` against a `float` return type
 
-**Síntoma.** Arreglado lo anterior, la llamada empezó a fallar con
+**Symptom.** With the above fixed, the call started failing with
 `Returned type numeric does not match expected type double precision in column 10`.
 
-**Causa.** `sum(1.0 / int)` devuelve `numeric` en PL/pgSQL. El tipo de retorno
-declara `rrf_score float`. La versión previa era `language sql` y Postgres
-hacía el cast implícito — el error apareció recién al pasarla a `plpgsql` para
-poder usar `SET LOCAL`.
+**Cause.** `sum(1.0 / int)` returns `numeric` in PL/pgSQL. The return type
+declares `rrf_score float`. The previous version was `language sql` and Postgres
+did the cast implicitly — the error only appeared after moving to `plpgsql` in
+order to use `SET LOCAL`.
 
-**Fix.** Cast explícito en los dos niveles: `(1.0 / (k + rnk))::float` y
+**Fix.** Explicit casts at both levels: `(1.0 / (k + rnk))::float` and
 `sum(...)::float`.
 
-**La lección.** Tres bugs encadenados, cada uno causado por arreglar el
-anterior. Vale la pena anotarlos juntos: por separado, ninguno de los tres
-tiene sentido.
+**The lesson.** Three chained bugs, each caused by fixing the previous one.
+Worth writing down together: separately, none of the three makes sense.
 
 ---
 
-## 4. Migraciones que no se pueden re-aplicar
+## 4. Migrations that can't be re-applied
 
-**Síntoma.** Un entorno quedaba a medio migrar y la migración siguiente fallaba
-al correrla de nuevo.
+**Symptom.** An environment got half-migrated and the next migration failed when
+run again.
 
-**Causa.** `drop function ... (uuid, text, vector, int, int, uuid[])` necesita
-la signature exacta. Mientras se itera sobre la función, la signature cambia, y
-el `drop` de la migración nueva no encuentra la versión vieja.
+**Cause.** `drop function ... (uuid, text, vector, int, int, uuid[])` needs the
+exact signature. While iterating on the function the signature changes, and the
+new migration's `drop` can't find the old version.
 
-**Fix.** Borrar por nombre recorriendo `pg_proc`, sin conocer las signatures.
+**Fix.** Drop by name, walking `pg_proc`, without knowing the signatures.
 
-**La lección.** Una migración tiene que poder correrse dos veces. El momento en
-que eso importa es justo cuando algo ya salió mal.
-
----
-
-## 5. El umbral de rechazo
-
-La búsqueda híbrida **siempre** devuelve resultados: por mal que matcheen, los
-k primeros chunks salen igual. Sin un piso de puntaje, una pregunta sobre un
-tema que no está en el corpus recupera los fragmentos menos malos y el modelo,
-obediente, arma una respuesta citándolos.
-
-Eso es peor que un "no sé", porque las citas son reales: apuntan a pasajes que
-existen y que el usuario puede ir a verificar. Lo que no existe es la relación
-entre esos pasajes y la pregunta.
-
-`MIN_RRF_SCORE` se calibra contra el corpus propio. No hay un valor universal.
+**The lesson.** A migration has to survive being run twice. The moment that
+matters is exactly when something has already gone wrong.
 
 ---
 
-## 6. La metadata ausente se declara, no se omite
+## 5. The refusal threshold
 
-Pedirle a un modelo una cita en APA sobre un corpus sin año de publicación
-produce años inventados. No porque el modelo mienta, sino porque el formato APA
-espera un año y nada en el prompt dice que ese dato no existe.
+Hybrid search **always** returns results: however poorly they match, the top k
+chunks come back anyway. Without a score floor, a question about a topic that
+isn't in the corpus retrieves the least-bad fragments and the model, obediently,
+builds an answer citing them.
 
-La solución es una línea por campo faltante:
+That's worse than "I don't know", because the citations are real: they point at
+passages that exist and that the user can go verify. What doesn't exist is the
+relationship between those passages and the question.
+
+`MIN_RRF_SCORE` is calibrated against your own corpus. There's no universal
+value.
+
+---
+
+## 6. Absent metadata is declared, not omitted
+
+Asking a model for an APA citation over a corpus with no publication year
+produces invented years. Not because the model lies, but because the APA format
+expects a year and nothing in the prompt says that field doesn't exist.
+
+The solution is one line per missing field:
 
 ```
-AÑO=(no registrado — usá «s.f.» en APA)
-EDITORIAL=(no registrada — omití en APA)
+YEAR=(not recorded — use "n.d." in APA)
+PUBLISHER=(not recorded — omit in APA)
 ```
 
-Es el mismo principio que un fallo ruidoso en vez de silencioso: la ausencia de
-un dato tiene que ser visible.
+It's the same principle as failing loudly rather than silently: the absence of a
+value has to be visible.
 
 ---
 
-## 7. La alucinación del planificador
+## 7. The planner's hallucination
 
-El planificador de consultas también alucina, y es más difícil de detectar.
+The query planner hallucinates too, and it's harder to catch.
 
-Ante un mensaje vago sobre un dominio conocido, propone consultas con autores
-que "deberían" estar en ese corpus pero que nunca se cargaron. El motor busca
-material inexistente, no encuentra nada, y el sistema responde que no tiene
-información — cuando sí la tenía, bajo otros nombres.
+Given a vague message about a familiar domain, it proposes queries naming
+authors that "ought to" be in that corpus but were never loaded. The engine
+searches for material that doesn't exist, finds nothing, and the system answers
+that it has no information — when it did, under other names.
 
-El fallo ocurre antes de la recuperación, así que una evaluación que solo mire
-la respuesta final lo registra como "el corpus no cubría el tema".
+The failure happens before retrieval, so an evaluation that only looks at the
+final answer records it as "the corpus didn't cover the topic".
 
-**Fix.** Pasarle al planificador la lista real de documentos de la colección
-como ancla.
+**Fix.** Give the planner the collection's real document list as an anchor.
 
 ---
 
-## 8. BM25 trata los términos como AND
+## 8. BM25 treats terms as AND
 
-El lado sparse de la búsqueda híbrida penaliza las consultas largas. Agregar
-palabras de andamiaje —"ideas principales", "resumen", "conceptos"— parece
-enriquecer la consulta y en realidad la rompe: cada término adicional es un
-requisito más que el documento debe cumplir.
+The sparse side of hybrid search penalizes long queries. Adding scaffolding
+words — "main ideas", "summary", "concepts" — looks like it enriches the query
+and actually breaks it: each extra term is one more requirement the document has
+to satisfy.
 
-Por eso el prompt del planificador prohíbe explícitamente ese vocabulario. Si
-el documento se titula *Modelos de democracia*, la consulta es
-`Lijphart modelos democracia`, no `ideas principales de Lijphart sobre los
-modelos de democracia`.
+That's why the planner's prompt explicitly forbids that vocabulary. If the
+document is titled *Patterns of Democracy*, the query is
+`Lijphart patterns democracy`, not `main ideas from Lijphart about patterns of
+democracy`.
 
-Es un caso donde la intuición de "más contexto es mejor" —cierta para el lado
-denso— es exactamente falsa para el lado sparse, y la búsqueda híbrida tiene
-que convivir con ambas.
+It's a case where the intuition "more context is better" — true for the dense
+side — is exactly false for the sparse one, and hybrid search has to live with
+both.

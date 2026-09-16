@@ -7,16 +7,17 @@ const MODEL = "gpt-4o";
 const TEMPERATURE = 0.2;
 
 /**
- * Umbral de RRF por debajo del cual se considera que no hay material.
+ * RRF score below which we treat the corpus as having no material.
  *
- * Existe porque la búsqueda híbrida SIEMPRE devuelve algo: por mal que
- * matcheen, los k primeros chunks salen igual. Sin umbral, una pregunta sobre
- * un tema ausente recupera los fragmentos menos malos del corpus y el modelo,
- * obediente, construye una respuesta citándolos. El resultado es peor que un
- * "no sé": es una respuesta con citas reales a pasajes que no vienen al caso.
+ * It exists because hybrid search ALWAYS returns something: however badly they
+ * match, the top k chunks come back anyway. Without a floor, a question about an
+ * absent topic retrieves the least-bad fragments and the model, obediently,
+ * builds an answer citing them. The result is worse than "I don't know": it's an
+ * answer with real citations to passages that don't apply.
  *
- * El valor se calibra contra el corpus propio. 0.005 es el punto donde, en el
- * sistema del que sale este código, empezaban a colarse los falsos positivos.
+ * The value is calibrated against your own corpus. 0.005 is where, in the system
+ * this code came from, false positives started slipping through. Recalibrate by
+ * running known-absent questions and reading the top scores they return.
  */
 export const MIN_RRF_SCORE = 0.005;
 
@@ -24,21 +25,26 @@ export const REFUSAL =
   "No encuentro este tema en el material de esta colección. Si crees que debería estar, revisa que la fuente correspondiente esté cargada.";
 
 /**
- * El prompt.
+ * The prompt.
  *
- * La distinción que lo sostiene: separar lo que el modelo AFIRMA sobre las
- * fuentes de lo que el modelo APORTA de su lado.
+ * The distinction holding it together: separating what the model ASSERTS about
+ * the sources from what the model CONTRIBUTES itself.
  *
- * Un RAG que prohíbe todo lo que no esté en el corpus produce respuestas
- * inservibles como material de estudio —no puede dar un ejemplo, ni una
- * analogía, ni reformular en palabras simples—. Uno que lo permite sin marcar
- * termina atribuyéndole al autor ejemplos que el autor nunca dio, que es una
- * alucinación más difícil de detectar que un dato falso, porque el dato suena
- * razonable y la cita que lo acompaña es real.
+ * A RAG that forbids everything outside the corpus produces answers that are
+ * useless as study material — it can't give an example, or an analogy, or
+ * restate something in plain words. One that allows it without marking ends up
+ * attributing to the author examples the author never gave, which is a harder
+ * hallucination to catch than a false fact: it sounds reasonable and the
+ * citation attached to it is genuine.
  *
- * La regla resuelve las dos: los hechos llevan cita obligatoria, las
- * ilustraciones llevan marca obligatoria, y ninguna de las dos puede pasar por
- * la otra.
+ * The rule resolves both: facts carry a mandatory citation, illustrations carry
+ * a mandatory marker, and neither can pass for the other.
+ *
+ * NOTE ON LANGUAGE: the prompt is in Spanish because the corpus it was written
+ * for is in Spanish, and the same goes for the `plainto_tsquery('spanish', …)`
+ * configuration in the SQL. Prompt language should follow corpus language —
+ * translating this to English while retrieving Spanish passages costs
+ * instruction-following accuracy for nothing.
  */
 const SYSTEM_PROMPT = `Eres un asistente que responde ÚNICAMENTE sobre el CORPUS que aparece abajo (fragmentos recuperados del material de la colección).
 
@@ -77,10 +83,10 @@ export type AnswerResult =
   | { kind: "answer"; stream: AsyncIterable<string>; cited: RetrievedChunk[] };
 
 /**
- * Decide si hay material suficiente y, si lo hay, responde citando.
+ * Decides whether there is enough material and, if so, answers with citations.
  *
- * Devuelve el rechazo como un caso normal y no como un error: que el corpus no
- * tenga la respuesta es un desenlace legítimo del sistema, no una falla.
+ * Returns the refusal as a normal case rather than an error: the corpus not
+ * holding the answer is a legitimate outcome of the system, not a failure.
  */
 export async function answer(
   messages: Msg[],

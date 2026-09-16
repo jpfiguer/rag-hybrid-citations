@@ -2,11 +2,11 @@ import { embedOne } from "../ingest/embedder";
 import type { RetrievedChunk, RpcClient } from "../types";
 
 /**
- * Búsqueda híbrida: embebe la consulta y delega la fusión a Postgres.
+ * Hybrid search: embeds the query and delegates the fusion to Postgres.
  *
- * La fusión ocurre en SQL a propósito. Traer los dos rankings al proceso de
- * Node para mezclarlos acá significaría mover cientos de filas por consulta
- * para descartar casi todas; la base ya tiene ambos índices y sabe hacerlo.
+ * Fusion happens in SQL on purpose. Pulling both rankings into the Node process
+ * to mix them here would mean moving hundreds of rows per query only to discard
+ * almost all of them; the database already has both indexes and knows how.
  */
 export async function retrieve(
   client: RpcClient,
@@ -21,7 +21,7 @@ export async function retrieve(
   const { data, error } = await client.rpc("hybrid_search", {
     p_collection_id: collectionId,
     p_query_text: query,
-    // pgvector acepta el literal de array; evita que el driver lo mande como JSON.
+    // pgvector accepts the array literal; this stops the driver sending it as JSON.
     p_query_embedding: `[${embedding.join(",")}]`,
     p_match_count: limit,
     p_section_ids: sectionIds && sectionIds.length > 0 ? sectionIds : null,
@@ -31,7 +31,7 @@ export async function retrieve(
   return (data ?? []) as RetrievedChunk[];
 }
 
-/** "p. 12" o "pp. 12-15". Vacío si el documento no tenía paginación. */
+/** "p. 12" or "pp. 12-15". Empty when the document had no pagination. */
 export function formatPageRef(
   pageStart: number | null,
   pageEnd: number | null

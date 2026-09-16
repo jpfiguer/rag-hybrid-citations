@@ -1,17 +1,17 @@
 -- ---------------------------------------------------------------------------
--- hybrid_search — denso + BM25 fusionados con Reciprocal Rank Fusion.
+-- hybrid_search — dense + BM25 fused with Reciprocal Rank Fusion.
 --
--- Tres decisiones que salieron de fallas en producción, no del diseño inicial.
--- Están explicadas en docs/DECISIONS.md; acá va el resumen de cada una.
+-- Three decisions that came out of production failures, not the initial design.
+-- They're explained in docs/DECISIONS.md; here's the summary of each.
 -- ---------------------------------------------------------------------------
 
--- Drop idempotente por NOMBRE, no por signature.
+-- Idempotent drop by NAME, not by signature.
 --
--- Por qué: al iterar sobre la función cambia la lista de parámetros, y
--- `drop function ... (uuid, text, vector, int, int, uuid[])` falla cuando la
--- que está viva tiene otra firma. Entonces la migración no se puede re-aplicar
--- sobre un entorno que quedó a medias, que es exactamente cuando más se
--- necesita. Esto borra todas las sobrecargas existentes sin conocerlas.
+-- Why: while iterating on the function the parameter list changes, and
+-- `drop function ... (uuid, text, vector, int, int, uuid[])` fails when the live
+-- one has a different signature. So the migration can't be re-applied against an
+-- environment that ended up half-migrated — which is exactly when you need it
+-- most. This drops every existing overload without knowing them.
 do $$
 declare r record;
 begin
@@ -47,28 +47,27 @@ returns table (
 )
 language plpgsql
 
--- VOLATILE, no STABLE.
+-- VOLATILE, not STABLE.
 --
--- Por qué: Postgres prohíbe SET LOCAL dentro de funciones STABLE o IMMUTABLE,
--- y acá hace falta para ajustar el escaneo de HNSW por consulta. Marcarla
--- STABLE "porque solo lee" es la intuición correcta y el resultado es un
--- error en tiempo de ejecución.
+-- Why: Postgres forbids SET LOCAL inside STABLE or IMMUTABLE functions, and it's
+-- needed here to tune the HNSW scan per query. Marking it STABLE "because it
+-- only reads" is the intuitive call, and the result is a runtime error.
 volatile
 security invoker
 set search_path = public
 as $func$
 begin
-  -- El filtro post-hoc contra HNSW.
+  -- The post-hoc filter against HNSW.
   --
-  -- Por qué: HNSW recorre el grafo y DESPUÉS se aplica `where collection_id = X`.
-  -- Si los vecinos más cercanos del vector de consulta pertenecen a otra
-  -- colección, el filtro los descarta todos y la búsqueda devuelve cero
-  -- resultados aunque la colección sí tenga material relevante. El síntoma es
-  -- desconcertante: funciona con una colección cargada y falla al agregar una
-  -- segunda, más grande.
+  -- Why: HNSW walks the graph and only THEN is `where collection_id = X`
+  -- applied. If the query vector's nearest neighbours belong to another
+  -- collection, the filter discards all of them and the search returns zero
+  -- results even though the collection does hold relevant material. The symptom
+  -- is baffling: it works with one collection loaded and fails once you add a
+  -- second, larger one.
   --
-  -- `iterative_scan = strict_order` hace que HNSW siga buscando más allá de
-  -- ef_search cuando el filtro descarta candidatos.
+  -- `iterative_scan = strict_order` makes HNSW keep searching beyond ef_search
+  -- when the filter discards candidates.
   -- Ref: https://github.com/pgvector/pgvector#iterative-index-scans
   set local hnsw.iterative_scan = 'strict_order';
   set local hnsw.max_scan_tuples = 20000;
@@ -94,20 +93,21 @@ begin
     limit p_match_count
   ),
 
-  -- Reciprocal Rank Fusion: cada lado aporta 1/(k + posición).
+  -- Reciprocal Rank Fusion: each side contributes 1/(k + rank).
   --
-  -- La gracia de RRF es que fusiona por POSICIÓN y no por puntaje, así que no
-  -- hay que normalizar la distancia coseno contra ts_rank_cd —dos escalas que
-  -- no son comparables— ni elegir un peso arbitrario entre ambas. k=60 es el
-  -- valor del paper original y aplana la diferencia entre los primeros puestos.
+  -- The point of RRF is that it fuses by RANK rather than by score, so there's
+  -- no need to normalize cosine distance against ts_rank_cd — two scales with no
+  -- relationship — and no arbitrary weight to pick between them. k=60 is the
+  -- value from the original paper and flattens the difference between the top
+  -- few positions.
   --
-  -- El `::float` no es cosmético. `sum(1.0 / int)` devuelve `numeric` en
-  -- PL/pgSQL, y el tipo de retorno declara `float` (double precision). Sin el
-  -- cast, PostgREST rechaza la llamada con
+  -- The `::float` is not cosmetic. `sum(1.0 / int)` returns `numeric` in
+  -- PL/pgSQL, and the return type declares `float` (double precision). Without
+  -- the cast, PostgREST rejects the call with
   --   "Returned type numeric does not match expected type double precision".
-  -- La versión anterior de esta función era `language sql` y Postgres hacía el
-  -- cast implícito, así que el error apareció recién al pasarla a plpgsql para
-  -- poder usar SET LOCAL: un bug causado por arreglar otro bug.
+  -- The previous version of this function was `language sql` and Postgres cast
+  -- implicitly, so the error only showed up once it moved to plpgsql to be able
+  -- to use SET LOCAL: a bug caused by fixing another bug.
   fused as (
     select id, sum(score)::float as rrf_score from (
       select id, (1.0 / (p_rrf_k + rnk))::float as score from dense

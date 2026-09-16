@@ -1,9 +1,9 @@
 /**
- * Un chunk recuperado, tal como lo devuelve `hybrid_search`.
+ * A retrieved chunk, as returned by `hybrid_search`.
  *
- * Los campos de procedencia —`document_title`, `author`, `page_start`,
- * `page_end`, `section_path`— viajan hasta el prompt. No son metadata
- * decorativa: son lo que permite que la cita sea comprobable.
+ * The provenance fields — `document_title`, `author`, `page_start`, `page_end`,
+ * `section_path` — travel all the way to the prompt. They are not decorative
+ * metadata: they are what makes a citation checkable.
  */
 export type RetrievedChunk = {
   chunk_id: string;
@@ -15,14 +15,14 @@ export type RetrievedChunk = {
   section_path: string | null;
   content: string;
   section_id: string | null;
-  /** Puntaje de Reciprocal Rank Fusion. Mayor es mejor. */
+  /** Reciprocal Rank Fusion score. Higher is better. */
   rrf_score: number;
 };
 
 /**
- * Cliente mínimo que este paquete necesita. Lo cumple `@supabase/supabase-js`,
- * pero está declarado así a propósito: cualquier cosa capaz de llamar a la
- * función de Postgres sirve, y el paquete no se casa con un SDK.
+ * The minimal client this package needs. `@supabase/supabase-js` satisfies it,
+ * but it is declared this way on purpose: anything able to call the Postgres
+ * function will do, and the package is not married to a specific SDK.
  */
 export type RpcClient = {
   rpc(

@@ -1,13 +1,12 @@
 import type { RetrievedChunk } from "../types";
 
 /**
- * Fusiona los resultados de N consultas paralelas en una sola lista.
+ * Merges the results of N parallel queries into a single list.
  *
- * Un chunk que aparece en varias consultas conserva el MAYOR rrf_score
- * observado, no la suma. Sumar premiaría a los chunks genéricos —los que
- * matchean con cualquier cosa— y son justamente los que menos aportan a una
- * respuesta con citas. Con el máximo, lo que gana es la mejor evidencia para
- * alguna sub-pregunta concreta.
+ * A chunk appearing in several queries keeps the HIGHEST rrf_score observed, not
+ * the sum. Summing would reward generic chunks — the ones that match anything —
+ * and those are precisely the ones that contribute least to a cited answer. With
+ * the maximum, what wins is the best evidence for some specific sub-question.
  */
 export function mergeResults(
   results: RetrievedChunk[][],
@@ -28,13 +27,12 @@ export function mergeResults(
 }
 
 /**
- * Cuántos chunks pedir por consulta y cuántos conservar al final.
+ * How many chunks to request per query, and how many to keep overall.
  *
- * Con una sola consulta conviene traer más de cada una; con muchas, menos por
- * consulta pero un tope final más alto. Sin este ajuste, un "resume cada
- * fuente" sobre diez documentos o bien recupera poco de cada uno, o bien le
- * entrega al modelo un corpus tan grande que diluye la atención y empieza a
- * omitir autores.
+ * With a single query it pays to pull more from it; with many, fewer per query
+ * but a higher final cap. Without this adjustment, a "summarize every source"
+ * over ten documents either retrieves too little from each, or hands the model a
+ * corpus so large that it dilutes attention and starts omitting sources.
  */
 export function planLimits(
   queryCount: number,
